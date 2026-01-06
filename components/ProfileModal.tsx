@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
-import { User, Trash2, Save, X, Loader2, AlertTriangle, ShieldCheck } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { User, Trash2, Save, X, Loader2, AlertTriangle, ShieldCheck, Camera, Upload } from 'lucide-react';
 import { Modal, Input, Button } from './ui/UIComponents';
 import { User as UserType } from '../types';
 import { deleteUser, updateProfile, signOut } from 'firebase/auth';
 import { deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { auth, db, storage } from '../firebase';
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -17,8 +18,45 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, use
   const [displayName, setDisplayName] = useState(user.displayName || '');
   const [photoURL, setPhotoURL] = useState(user.photoURL || '');
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validação básica
+    if (file.size > 2 * 1024 * 1024) { // 2MB limit
+        setError("A imagem deve ter no máximo 2MB.");
+        return;
+    }
+
+    setIsUploading(true);
+    setError('');
+
+    try {
+        if (!user.uid) throw new Error("Usuário não identificado");
+
+        // Criar referência no Storage: avatars/UID
+        const storageRef = ref(storage, `avatars/${user.uid}`);
+        
+        // Fazer Upload
+        await uploadBytes(storageRef, file);
+        
+        // Pegar URL
+        const downloadUrl = await getDownloadURL(storageRef);
+        
+        setPhotoURL(downloadUrl);
+    } catch (err: any) {
+        console.error("Erro no upload:", err);
+        setError("Falha ao enviar imagem. Verifique se o Firebase Storage está ativado.");
+    } finally {
+        setIsUploading(false);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,20 +140,38 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, use
             </div>
         ) : (
             <form onSubmit={handleSave} className="space-y-6">
-                <div className="flex justify-center mb-6">
-                    <div className="relative">
-                        <div className="w-24 h-24 rounded-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 overflow-hidden">
-                            <img src={photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName || 'User')}`} alt="Avatar" className="w-full h-full object-cover" />
+                <div className="flex flex-col items-center gap-4 mb-6">
+                    <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                        <div className="w-32 h-32 rounded-full bg-slate-100 dark:bg-white/5 border-2 border-slate-200 dark:border-white/10 overflow-hidden relative">
+                             {isUploading ? (
+                                 <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                     <Loader2 className="animate-spin text-white" size={32} />
+                                 </div>
+                             ) : (
+                                <img src={photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName || 'User')}`} alt="Avatar" className="w-full h-full object-cover transition-transform group-hover:scale-105" />
+                             )}
                         </div>
-                        <div className="absolute bottom-0 right-0 w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center text-black border-2 border-white dark:border-black shadow-lg">
-                            <ShieldCheck size={14} />
+                        <div className="absolute bottom-1 right-1 w-10 h-10 bg-slate-900 dark:bg-white rounded-full flex items-center justify-center text-white dark:text-black border-4 border-white dark:border-[#0a0a0a] shadow-lg transition-transform group-hover:scale-110">
+                            <Camera size={16} />
+                        </div>
+                        <div className="absolute inset-0 rounded-full bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <Upload size={24} className="text-white drop-shadow-md" />
                         </div>
                     </div>
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        accept="image/png, image/jpeg, image/jpg"
+                        onChange={handleFileChange}
+                    />
+                    <p className="text-xs text-slate-500 font-medium">Toque na foto para alterar (Máx: 2MB)</p>
                 </div>
 
                 <div className="space-y-4">
                     <Input label="Nome Completo" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
-                    <Input label="URL da Foto" value={photoURL} onChange={(e) => setPhotoURL(e.target.value)} placeholder="https://..." />
+                    
+                    {/* Campo de URL removido em favor do Upload, mas mantendo campo readonly de email */}
                     <div className="opacity-50 pointer-events-none">
                         <Input label="E-mail (Não editável)" value={user.email || ''} readOnly />
                     </div>
@@ -124,7 +180,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, use
                 {error && <p className="text-xs text-red-500 font-bold bg-red-500/10 p-2 rounded-lg text-center">{error}</p>}
 
                 <div className="pt-4 border-t border-slate-100 dark:border-white/5 flex flex-col gap-3">
-                    <Button type="submit" className="w-full py-4 bg-emerald-500 text-black font-black flex items-center justify-center gap-2" disabled={isLoading}>
+                    <Button type="submit" className="w-full py-4 bg-emerald-500 text-black font-black flex items-center justify-center gap-2" disabled={isLoading || isUploading}>
                          {isLoading ? <Loader2 size={18} className="animate-spin"/> : <><Save size={18}/> Salvar Alterações</>}
                     </Button>
                     
